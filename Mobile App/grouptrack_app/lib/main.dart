@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:data_table_2/data_table_2.dart';
 import 'package:flutter/material.dart';
 
@@ -9,7 +12,7 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -24,16 +27,6 @@ class MyApp extends StatelessWidget {
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -41,12 +34,37 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  List<ScanResult> _scanResults = [];
+  StreamSubscription<List<ScanResult>>? _scanSubscription;
 
-  void _updateDataTable() {
-    setState(() {
+  @override void initState(){
+    super.initState();
+    _startScan();
+  }
 
+  void _startScan(){
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+
+    _scanSubscription = FlutterBluePlus.onScanResults.listen((results){
+      setState((){
+        _scanResults = results;
+      });
     });
   }
+
+  void _connectToDevice(BluetoothDevice device) async {
+    await device.connect();
+    print("Verbunden mit ${device.advName}");
+
+    // TODO: DATEN EMPFANGEN
+  }
+
+  @override
+  void dispose() {
+    _scanSubscription?.cancel();
+    super.dispose();
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +77,20 @@ class _MyHomePageState extends State<MyHomePage> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
+            const Text("Gefundene Geräte:", style: TextStyle(fontWeight: FontWeight.bold)),
+              SizedBox(
+                height: 150,
+                child: ListView.builder(itemCount: _scanResults.length,
+                itemBuilder: (context, index){
+                  final res = _scanResults[index];
+                  return ListTile(
+                    title: Text(res.device.advName.isEmpty ? "Unbekannt" : res.device.advName),
+                    subtitle: Text(res.device.remoteId.toString()),
+                    onTap: () => _connectToDevice(res.device),
+                  );
+                },
+              ),
+            ),
             const SizedBox(height: 15),
             Expanded(
               child: DataTable2(
@@ -85,7 +117,7 @@ class _MyHomePageState extends State<MyHomePage> {
         )
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _updateDataTable,
+        onPressed: _startScan,
         tooltip: 'Update',
         child: const Icon(Icons.update),
       ),

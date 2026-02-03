@@ -2,6 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Diese App benötigt Bluetooth, um Tracker in der Nähe zu finden.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Diese App benötigt Bluetooth, um Tracker in der Nähe zu finden.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Standortzugriff ist für die Bluetooth-Suche erforderlich.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Standortzugriff ist für die Bluetooth-Suche erforderlich.</string>
+
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
