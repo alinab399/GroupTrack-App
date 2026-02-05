@@ -43,6 +43,7 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _isConnected = false;
   bool _connectionFailed = false;
   String _connectionError = '';
+  Timer? _keepAliveTimer;
 
   Map<String, dynamic>? _receivedData;
 
@@ -66,6 +67,35 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+
+  void _sendTimestamp() async {
+  if (_connectedDevice == null || !_isConnected) return;
+
+  // Diese UUID muss exakt mit #define CTRL_UUID im C++ Code übereinstimmen
+  const String ctrlUuid = "7c9a0003-6b6a-4f8f-9c8a-1b2c3d4e5f60";
+
+  try {
+    List<BluetoothService> services = await _connectedDevice!.discoverServices();
+    for (BluetoothService service in services) {
+      for (BluetoothCharacteristic characteristic in service.characteristics) {
+        // Wir prüfen gezielt auf die Control-UUID
+        if (characteristic.uuid.toString().toLowerCase() == ctrlUuid.toLowerCase()) {
+          String timestamp = DateTime.now().toIso8601String().substring(11, 19);
+          String message = "TS: $timestamp";
+          
+          await characteristic.write(utf8.encode(message));
+          print("Timestamp an Hardware gesendet: $message");
+          return;
+        }
+      }
+    }
+  } 
+  catch (e) {
+    print("Fehler beim Senden des Heartbeats: $e");
+  }
+  
+  }
+
   void _connectToDevice(BluetoothDevice device) async {
     setState(() {
       _connectionFailed = false;
@@ -80,6 +110,10 @@ class _MyHomePageState extends State<MyHomePage> {
             _connectedDevice = device;
             _connectionFailed = false;
             _startReceivingData(device);
+            _keepAliveTimer?.cancel();
+            _keepAliveTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+              _sendTimestamp();
+            });
           }
         });
       });
@@ -131,16 +165,42 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _disconnect() async {
-    if (_connectedDevice != null) {
+  _keepAliveTimer?.cancel();
+  _keepAliveTimer = null;
+  if (_connectedDevice != null) {
+    try {
       await _dataSubscription?.cancel();
-      await _connectionSubscription?.cancel();
+      _dataSubscription = null;
+
+      List<BluetoothService> services = await _connectedDevice!.discoverServices();
+      for (var service in services) {
+        for (var characteristic in service.characteristics) {
+          if (characteristic.properties.notify) {
+            await characteristic.setNotifyValue(false);
+          }
+        }
+      }
+
       await _connectedDevice!.disconnect();
       
+      await _connectionSubscription?.cancel();
+      _connectionSubscription = null;
+
       setState(() {
         _connectedDevice = null;
         _isConnected = false;
         _receivedData = null;
+        _scanResults = []; 
       });
+
+      print("Sauber getrennt.");
+      } catch (e) {
+        print("Fehler beim Trennen: $e");
+        setState(() {
+          _isConnected = false;
+          _connectedDevice = null;
+        });
+      }
     }
   }
 
@@ -228,7 +288,6 @@ class _MyHomePageState extends State<MyHomePage> {
             
             const SizedBox(height: 15),
             
-            // Show device list only when not connected
             if (!_isConnected) ...[
               const Text("Gefundene Geräte:", style: TextStyle(fontWeight: FontWeight.bold)),
               SizedBox(
@@ -280,26 +339,26 @@ class _MyHomePageState extends State<MyHomePage> {
               const Text("Empfangene Daten:", style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
               
-              // Die neue Card, die deine Tabelle enthält
+              
               Card(
-                elevation: 2, // Ein leichter Schatten für den Card-Effekt
+                elevation: 2,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: Padding(
-                  padding: const EdgeInsets.all(8.0), // Etwas Abstand zum Rand der Card
+                  padding: const EdgeInsets.all(8.0),
                   child: SizedBox(
-                    height: 200, // Feste Höhe, damit die Tabelle innerhalb der Card scrollbar bleibt
+                    height: 200,
                     child: DataTable2(
                       columnSpacing: 12,
                       horizontalMargin: 12,
-                      minWidth: 300, // Verhindert, dass die Tabelle zu schmal wird
+                      minWidth: 300,
                       columns: const [
                         DataColumn2(
                           label: Text('Nr.', style: TextStyle(fontWeight: FontWeight.bold)),
-                          size: ColumnSize.S, // Kleine Spalte für die Nummer
+                          size: ColumnSize.S,
                         ),
                         DataColumn2(
                           label: Text('Distanz (m)', style: TextStyle(fontWeight: FontWeight.bold)),
-                          size: ColumnSize.L, // Größere Spalte für die Distanz
+                          size: ColumnSize.L,
                         ),
                       ],
                       rows: const [
@@ -334,8 +393,8 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       floatingActionButton: FloatingActionButton(
       backgroundColor: _isConnected 
-          ? Colors.redAccent // Rot, wenn verbunden (zum Trennen)
-          : const Color.fromARGB(255, 124, 184, 127), // Grün zum Scannen
+          ? Colors.redAccent
+          : const Color.fromARGB(255, 124, 184, 127),
       foregroundColor: Colors.white,
       onPressed: _isConnected ? _disconnect : _startScan,
       tooltip: _isConnected ? 'Verbindung trennen' : 'Scan aktualisieren',
