@@ -12,7 +12,6 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -23,6 +22,14 @@ class MyApp extends StatelessWidget {
       home: const MyHomePage(title: 'GroupTrack'),
     );
   }
+}
+
+class DistanceMeasurement {
+  final String id;
+  final double distance;
+  final DateTime timestamp;
+
+  DistanceMeasurement({required this.id, required this.distance, required this.timestamp});
 }
 
 class MyHomePage extends StatefulWidget {
@@ -46,16 +53,18 @@ class _MyHomePageState extends State<MyHomePage> {
   Timer? _keepAliveTimer;
 
   Map<String, dynamic>? _receivedData;
+  final List<DistanceMeasurement> _history = [];
 
-  @override void initState(){
+  @override
+  void initState() {
     super.initState();
     _startScan();
   }
 
-  Future<void> _startScan() async{
+  Future<void> _startScan() async {
     if (await FlutterBluePlus.adapterState.first != BluetoothAdapterState.on) {
-    print("Bluetooth ist ausgeschaltet");
-    return;
+      print("Bluetooth ist ausgeschaltet");
+      return;
     }
 
     await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
@@ -67,33 +76,30 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
-
   void _sendTimestamp() async {
-  if (_connectedDevice == null || !_isConnected) return;
+    if (_connectedDevice == null || !_isConnected) return;
 
-  // Diese UUID muss exakt mit #define CTRL_UUID im C++ Code übereinstimmen
-  const String ctrlUuid = "7c9a0003-6b6a-4f8f-9c8a-1b2c3d4e5f60";
+    // Diese UUID muss exakt mit #define CTRL_UUID im C++ Code übereinstimmen
+    const String ctrlUuid = "7c9a0003-6b6a-4f8f-9c8a-1b2c3d4e5f60";
 
-  try {
-    List<BluetoothService> services = await _connectedDevice!.discoverServices();
-    for (BluetoothService service in services) {
-      for (BluetoothCharacteristic characteristic in service.characteristics) {
-        // Wir prüfen gezielt auf die Control-UUID
-        if (characteristic.uuid.toString().toLowerCase() == ctrlUuid.toLowerCase()) {
-          String timestamp = DateTime.now().toIso8601String().substring(11, 19);
-          String message = "TS: $timestamp";
-          
-          await characteristic.write(utf8.encode(message));
-          print("Timestamp an Hardware gesendet: $message");
-          return;
+    try {
+      List<BluetoothService> services = await _connectedDevice!.discoverServices();
+      for (BluetoothService service in services) {
+        for (BluetoothCharacteristic characteristic in service.characteristics) {
+          // Wir prüfen gezielt auf die Control-UUID
+          if (characteristic.uuid.toString().toLowerCase() == ctrlUuid.toLowerCase()) {
+            String timestamp = DateTime.now().toIso8601String().substring(11, 19);
+            String message = "TS: $timestamp";
+
+            await characteristic.write(utf8.encode(message));
+            print("Timestamp an Hardware gesendet: $message");
+            return;
+          }
         }
       }
+    } catch (e) {
+      print("Fehler beim Senden des Heartbeats: $e");
     }
-  } 
-  catch (e) {
-    print("Fehler beim Senden des Heartbeats: $e");
-  }
-  
   }
 
   void _connectToDevice(BluetoothDevice device) async {
@@ -120,7 +126,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
       await device.connect(timeout: const Duration(seconds: 15));
       print("Verbunden mit ${device.advName}");
-
     } catch (e) {
       setState(() {
         _connectionFailed = true;
@@ -133,29 +138,25 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _startReceivingData(BluetoothDevice device) async {
+    const String dataUuid = "7c9a0002-6b6a-4f8f-9c8a-1b2c3d4e5f60"; // Muss exakt matchen
+
     try {
       List<BluetoothService> services = await device.discoverServices();
       for (BluetoothService service in services) {
         for (BluetoothCharacteristic characteristic in service.characteristics) {
-          if (characteristic.properties.notify) {
+          
+          // Prüfe explizit auf die richtige UUID
+          if (characteristic.uuid.toString().toLowerCase() == dataUuid.toLowerCase()) {
+            
             await characteristic.setNotifyValue(true);
+            print("Abonniert: $dataUuid");
+
             _dataSubscription = characteristic.lastValueStream.listen((value) {
               if (value.isNotEmpty) {
-                try {
-                  String dataString = utf8.decode(value);
-                  Map<String, dynamic> jsonData = json.decode(dataString);
-                  
-                  setState(() {
-                    _receivedData = jsonData;
-                  });
-                  
-                  print("Empfangene Daten: $jsonData");
-                } catch (e) {
-                  print("Fehler beim Parsen der Daten: $e");
-                }
+                _parseJsonData(value); // Logik in eigene Funktion ausgelagert
               }
             });
-            break;
+            return; // Erfolg, wir können aufhören zu suchen
           }
         }
       }
@@ -164,36 +165,60 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  void _disconnect() async {
-  _keepAliveTimer?.cancel();
-  _keepAliveTimer = null;
-  if (_connectedDevice != null) {
+  // Hilfsfunktion zum Parsen
+  void _parseJsonData(List<int> value) {
     try {
-      await _dataSubscription?.cancel();
-      _dataSubscription = null;
-
-      List<BluetoothService> services = await _connectedDevice!.discoverServices();
-      for (var service in services) {
-        for (var characteristic in service.characteristics) {
-          if (characteristic.properties.notify) {
-            await characteristic.setNotifyValue(false);
-          }
-        }
-      }
-
-      await _connectedDevice!.disconnect();
-      
-      await _connectionSubscription?.cancel();
-      _connectionSubscription = null;
+      String dataString = utf8.decode(value);
+      print("Roh-Daten vom ESP32: $dataString");
+      Map<String, dynamic> jsonData = json.decode(dataString);
 
       setState(() {
-        _connectedDevice = null;
-        _isConnected = false;
-        _receivedData = null;
-        _scanResults = []; 
+        _receivedData = jsonData;
+        if (jsonData.containsKey('dist_m')) {
+          double d = (jsonData['dist_m'] as num).toDouble();
+          _history.insert(0, DistanceMeasurement(
+            id: "LoRa-Sender",
+            distance: d,
+            timestamp: DateTime.now(),
+          ));
+          if (_history.length > 20) _history.removeLast();
+        }
       });
+    } catch (e) {
+      print("JSON Parse Fehler: $e");
+    }
+  }
 
-      print("Sauber getrennt.");
+  void _disconnect() async {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+    if (_connectedDevice != null) {
+      try {
+        await _dataSubscription?.cancel();
+        _dataSubscription = null;
+
+        List<BluetoothService> services = await _connectedDevice!.discoverServices();
+        for (var service in services) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.properties.notify) {
+              await characteristic.setNotifyValue(false);
+            }
+          }
+        }
+
+        await _connectedDevice!.disconnect();
+
+        await _connectionSubscription?.cancel();
+        _connectionSubscription = null;
+
+        setState(() {
+          _connectedDevice = null;
+          _isConnected = false;
+          _receivedData = null;
+          _scanResults = [];
+        });
+
+        print("Sauber getrennt.");
       } catch (e) {
         print("Fehler beim Trennen: $e");
         setState(() {
@@ -209,10 +234,11 @@ class _MyHomePageState extends State<MyHomePage> {
     _scanSubscription?.cancel();
     _connectionSubscription?.cancel();
     _dataSubscription?.cancel();
+    _keepAliveTimer?.cancel();
     super.dispose();
   }
 
-@override
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -243,8 +269,8 @@ class _MyHomePageState extends State<MyHomePage> {
                               style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
                             ),
                             Text(
-                              _connectedDevice?.advName.isNotEmpty == true 
-                                  ? _connectedDevice!.advName 
+                              _connectedDevice?.advName.isNotEmpty == true
+                                  ? _connectedDevice!.advName
                                   : _connectedDevice?.platformName ?? 'Unbekannt',
                               style: const TextStyle(fontSize: 12),
                             ),
@@ -285,13 +311,11 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
               ),
-            
             const SizedBox(height: 15),
-            
             if (!_isConnected) ...[
               const Text("Gefundene Geräte:", style: TextStyle(fontWeight: FontWeight.bold)),
               SizedBox(
-                height: 350,
+                height: 325,
                 child: ListView.builder(
                   itemCount: _scanResults.length,
                   itemBuilder: (context, index) {
@@ -310,7 +334,6 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               const SizedBox(height: 15),
             ],
-            
             if (_isConnected && _receivedData != null) ...[
               const Text("Empfangene Daten:", style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
@@ -334,26 +357,26 @@ class _MyHomePageState extends State<MyHomePage> {
               const Text("Warte auf Daten...", style: TextStyle(fontStyle: FontStyle.italic)),
               const SizedBox(height: 15),
             ],
-            
-            if (_isConnected && _receivedData != null) ...[
-              const Text("Empfangene Daten:", style: TextStyle(fontWeight: FontWeight.bold)),
+            if (_isConnected && _history.isNotEmpty) ...[
+              const Text("Distanz-Historie (Live):", style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
-              
-              
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: SizedBox(
-                    height: 200,
+              Expanded(
+                child: Card(
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
                     child: DataTable2(
                       columnSpacing: 12,
                       horizontalMargin: 12,
                       minWidth: 300,
                       columns: const [
                         DataColumn2(
-                          label: Text('Nr.', style: TextStyle(fontWeight: FontWeight.bold)),
+                          label: Text('Zeit', style: TextStyle(fontWeight: FontWeight.bold)),
+                          size: ColumnSize.S,
+                        ),
+                        DataColumn2(
+                          label: Text('ID', style: TextStyle(fontWeight: FontWeight.bold)),
                           size: ColumnSize.S,
                         ),
                         DataColumn2(
@@ -361,16 +384,19 @@ class _MyHomePageState extends State<MyHomePage> {
                           size: ColumnSize.L,
                         ),
                       ],
-                      rows: const [
-                        DataRow(cells: [
-                          DataCell(Text('10')),
-                          DataCell(Text('200')),
-                        ]),
-                        DataRow(cells: [
-                          DataCell(Text('2')),
-                          DataCell(Text('10')),
-                        ]),
-                      ],
+                      rows: _history.map((item) => DataRow(cells: [
+                        DataCell(Text("${item.timestamp.hour}:${item.timestamp.minute}:${item.timestamp.second}")),
+                        DataCell(Text(item.id)),
+                        DataCell(
+                          Text(
+                            "${item.distance.toStringAsFixed(1)} m",
+                            style: TextStyle(
+                              color: item.distance >= 40 ? Colors.red : Colors.black,
+                              fontWeight: item.distance >= 40 ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      ])).toList(),
                     ),
                   ),
                 ),
@@ -382,7 +408,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   children: [
                     CircularProgressIndicator(),
                     SizedBox(height: 10),
-                    Text("Warte auf Daten...", style: TextStyle(fontStyle: FontStyle.italic)),
+                    Text("Warte auf GPS-Daten vom LoRa-Sender...", style: TextStyle(fontStyle: FontStyle.italic)),
                   ],
                 ),
               ),
@@ -392,14 +418,14 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       ),
       floatingActionButton: FloatingActionButton(
-      backgroundColor: _isConnected 
-          ? Colors.redAccent
-          : const Color.fromARGB(255, 124, 184, 127),
-      foregroundColor: Colors.white,
-      onPressed: _isConnected ? _disconnect : _startScan,
-      tooltip: _isConnected ? 'Verbindung trennen' : 'Scan aktualisieren',
-      child: Icon(_isConnected ? Icons.bluetooth_disabled : Icons.update),
-    ),
+        backgroundColor: _isConnected
+            ? Colors.redAccent
+            : const Color.fromARGB(255, 124, 184, 127),
+        foregroundColor: Colors.white,
+        onPressed: _isConnected ? _disconnect : _startScan,
+        tooltip: _isConnected ? 'Verbindung trennen' : 'Scan aktualisieren',
+        child: Icon(_isConnected ? Icons.bluetooth_disabled : Icons.update),
+      ),
     );
   }
 
